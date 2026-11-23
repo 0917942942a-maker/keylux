@@ -202,7 +202,9 @@ pub fn diagnose(writes: DiagnoseWrites) -> Result<Vec<String>> {
                 "  per-key frames: {ok}/{} sent, 04 20 status seen {:?}{}",
                 writes.esc_red_frames,
                 statuses,
-                first_err.map(|e| format!(", first error {e}")).unwrap_or_default()
+                first_err
+                    .map(|e| format!(", first error {e}"))
+                    .unwrap_or_default()
             ));
             match exchange(&io, p::cmd::STATUS, 0) {
                 Ok(r) => out.push(format!(
@@ -213,6 +215,7 @@ pub fn diagnose(writes: DiagnoseWrites) -> Result<Vec<String>> {
             }
             out.push("  Esc should now be red and every other key off.".into());
         }
+    }
     Ok(out)
 }
 
