@@ -46,33 +46,100 @@ fn scan_spec<'a>(opts: &'a ScanOptions) -> ScanSpec<'a> {
         packet_len: p::PACKET_LEN,
         known: p::KNOWN,
         opts,
+        // The Nova only answers a read after a command; a bare read can stall.
+        read_probe: false,
+        collection: Some(p::is_command_collection),
     }
 }
 
 /// Send one command and check its echo.
+///
+/// The vendor driver reads the echo ~3 ms after the write, and the firmware
+/// answers `04 xx 00 ff` while busy, so the read is retried a few times
+/// before giving up. The write itself is never repeated here.
 fn exchange(io: &Transport, cmd: u8, arg: u8) -> Result<Vec<u8>> {
     io.send(&p::command(cmd, arg))?;
-    let resp = io.receive()?;
-    if !p::is_ack(&resp, cmd) {
-        return Err(Error::Nack { cmd });
+    let mut last = Err(Error::Nack { cmd });
+    for attempt in 0..4 {
+        thread::sleep(Duration::from_millis(if attempt == 0 { 3 } else { 15 }));
+        match io.receive() {
+            Ok(resp) if p::is_ack(&resp, cmd) => return Ok(resp),
+            Ok(_) => last = Err(Error::Nack { cmd }),
+            Err(e) => last = Err(e),
+        }
     }
-    Ok(resp)
+    last
+}
+
+/// Step-by-step report of how the Nova's command collection responds.
+///
+/// Touches only the `ff13` collection, and sends only the status poll the
+/// vendor driver itself sends constantly. One line per step, for a user to
+/// paste back when discovery fails.
+pub fn diagnose() -> Result<Vec<String>> {
+    let hex = |b: &[u8]| {
+        b.iter()
+            .take(12)
+            .map(|x| format!("{x:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let mut out = Vec::new();
+    let cols = transport::list_collections(p::VENDOR_ID, p::PRODUCT_ID)?;
+    let ours: Vec<_> = cols
+        .iter()
+        .filter(|c| p::is_command_collection(c.usage_page, c.interface))
+        .collect();
+    out.push(format!(
+        "{} collection(s) for {}, {} on usage page {:#06x}",
+        cols.len(),
+        p::WIRED,
+        ours.len(),
+        p::USAGE_PAGE
+    ));
+    for c in ours {
+        out.push(format!("interface {} usage {:#06x}", c.interface, c.usage));
+        let io = match Transport::open_path(&c.path, p::REPORT_ID, p::PACKET_LEN) {
+            Ok(io) => io,
+            Err(e) => {
+                out.push(format!("  open: FAILED {e}"));
+                continue;
+            }
+        };
+        out.push("  open: ok".into());
+        match io.send(&p::command(p::cmd::STATUS, 0)) {
+            Ok(()) => out.push(format!("  write 04 02 ({} bytes): ok", p::PACKET_LEN)),
+            Err(e) => out.push(format!(
+                "  write 04 02 ({} bytes): FAILED {e}",
+                p::PACKET_LEN
+            )),
+        }
+        for attempt in 0..3 {
+            thread::sleep(Duration::from_millis(if attempt == 0 { 3 } else { 15 }));
+            match io.receive() {
+                Ok(r) => out.push(format!(
+                    "  read #{attempt}: {} bytes [{}] ack={}",
+                    r.len(),
+                    hex(&r),
+                    p::is_ack(&r, p::cmd::STATUS)
+                )),
+                Err(e) => out.push(format!("  read #{attempt}: FAILED {e}")),
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// Is this collection the Nova's command channel?
 ///
 /// Only the status poll is sent — a read the vendor driver issues constantly.
-/// Retries, because the firmware answers `04 02 00 ff` while busy.
 fn speaks_the_protocol(io: &Transport) -> bool {
-    for attempt in 0..4 {
+    for attempt in 0..3 {
         if attempt > 0 {
             thread::sleep(Duration::from_millis(30));
         }
-        match exchange(io, p::cmd::STATUS, 0) {
-            Ok(_) => return true,
-            // A collection that rejects the write outright is not ours.
-            Err(Error::Hid(_)) => return false,
-            Err(_) => {}
+        if exchange(io, p::cmd::STATUS, 0).is_ok() {
+            return true;
         }
     }
     false

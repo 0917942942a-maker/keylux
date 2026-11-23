@@ -22,6 +22,17 @@ pub const WIRED: DeviceId = DeviceId::new(VENDOR_ID, PRODUCT_ID);
 /// Built-in known ids. Only the wired link has been captured.
 pub const KNOWN: &[(DeviceId, Link)] = &[(WIRED, Link::Wired)];
 
+/// The command collection. Windows reports it as interface 3, `ff13/0001`.
+pub const USAGE_PAGE: u16 = 0xff13;
+pub const INTERFACE: i32 = 3;
+
+/// Is this the collection commands go to? By usage page where the OS reports
+/// one; by interface number where it does not (Linux hidraw has reported 0
+/// for every collection but the first).
+pub fn is_command_collection(usage_page: u16, interface: i32) -> bool {
+    usage_page == USAGE_PAGE || (usage_page == 0 && interface == INTERFACE)
+}
+
 /// Unnumbered reports: hidapi wants a leading 0x00 byte on the buffer.
 pub const REPORT_ID: u8 = 0x00;
 /// Payload length of one feature report, as seen on the wire.
@@ -146,6 +157,27 @@ mod tests {
 
     fn hex(b: &[u8]) -> String {
         b.iter().map(|x| format!("{x:02x}")).collect()
+    }
+
+    #[test]
+    fn only_the_ff13_collection_is_a_command_channel() {
+        // The eight collections `keylux diagnose` listed on Windows.
+        let seen = [
+            (0x000c, 1, false),
+            (0x0001, 1, false),
+            (0xffff, 1, false),
+            (0xff13, 3, true),
+            (0xff68, 2, false),
+            (0x0001, 0, false),
+        ];
+        for (page, iface, want) in seen {
+            assert_eq!(
+                is_command_collection(page, iface),
+                want,
+                "{page:#06x}/{iface}"
+            );
+        }
+        assert!(is_command_collection(0, 3), "hidraw without usage pages");
     }
 
     #[test]

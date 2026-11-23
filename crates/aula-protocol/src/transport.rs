@@ -58,7 +58,7 @@ impl Transport {
         let mut last_err = None;
         let cols = openable_collections(&all, id, true);
         for info in &cols {
-            match open_probed(&api, info, report_id, packet_len) {
+            match open_probed_raw(&api, info, report_id, packet_len, true) {
                 Probe::Answered(t) => return Ok(t),
                 Probe::Silent => {}
                 Probe::Failed(e) => last_err = Some(e),
@@ -211,6 +211,15 @@ pub struct ScanSpec<'a> {
     /// Built-in known devices and the link each one implies.
     pub known: &'a [(DeviceId, Link)],
     pub opts: &'a ScanOptions,
+    /// Require a collection to answer a bare feature-report read before
+    /// `confirm` runs. Right for the F75, where it filters out collections
+    /// that do not use its report ID. Wrong for a device that only answers a
+    /// read *after* a command — there `confirm` is the only meaningful test.
+    pub read_probe: bool,
+    /// Only consider collections this accepts, given `(usage_page, interface)`.
+    /// For a protocol whose confirming command is a write, this keeps it off
+    /// every other vendor collection the device exposes.
+    pub collection: Option<fn(u16, i32) -> bool>,
 }
 
 /// Find every device that speaks the protocol.
@@ -236,8 +245,11 @@ where
         // At most one candidate per device: the first collection that answers
         // is the RGB one, exactly as the single-device path has always worked.
         let trusted = confidence == Confidence::Known;
-        for info in openable_collections(&all, id, trusted) {
-            if let Probe::Answered(t) = open_probed(&api, info, spec.report_id, spec.packet_len) {
+        for info in openable_collections(&all, id, trusted)
+            .into_iter()
+            .filter(|d| accepts(spec, d))
+        {
+            if let Probe::Answered(t) = open_probed(&api, info, spec) {
                 if !confirm(&t) {
                     // Answered, but it is not one of ours. Keep looking: the
                     // next collection on this device may be.
@@ -297,12 +309,15 @@ where
     let mut out = Vec::new();
     for (id, _, confidence) in targets(&all, spec) {
         let trusted = confidence == Confidence::Known;
-        let openable = openable_collections(&all, id, trusted);
+        let openable: Vec<_> = openable_collections(&all, id, trusted)
+            .into_iter()
+            .filter(|d| accepts(spec, d))
+            .collect();
         for info in collections(&all, id) {
             let result = if !openable.iter().any(|o| o.path() == info.path()) {
                 ProbeResult::OsOwned
             } else {
-                match open_probed(&api, info, spec.report_id, spec.packet_len) {
+                match open_probed(&api, info, spec) {
                     Probe::Answered(t) => ProbeResult::Answered {
                         confirmed: confirm(&t),
                     },
@@ -369,6 +384,14 @@ fn targets(all: &[&DeviceInfo], spec: &ScanSpec<'_>) -> Vec<(DeviceId, Link, Con
     found.into_values().collect()
 }
 
+/// Does the scan's collection filter, if any, accept this collection?
+fn accepts(spec: &ScanSpec<'_>, d: &DeviceInfo) -> bool {
+    match spec.collection {
+        Some(f) => f(d.usage_page(), d.interface_number()),
+        None => true,
+    }
+}
+
 /// Does this device present a keyboard, as a receiver for one would?
 ///
 /// Cheap, and it keeps a deep scan away from fingerprint readers, webcams and
@@ -422,19 +445,31 @@ enum Probe {
     Failed(String),
 }
 
-fn open_probed(api: &HidApi, info: &DeviceInfo, report_id: u8, packet_len: usize) -> Probe {
+fn open_probed(api: &HidApi, info: &DeviceInfo, spec: &ScanSpec<'_>) -> Probe {
+    open_probed_raw(api, info, spec.report_id, spec.packet_len, spec.read_probe)
+}
+
+fn open_probed_raw(
+    api: &HidApi,
+    info: &DeviceInfo,
+    report_id: u8,
+    packet_len: usize,
+    read_probe: bool,
+) -> Probe {
     let dev = match info.open_device(api) {
         Ok(d) => d,
         Err(e) => return Probe::Failed(e.to_string()),
     };
-    let mut buf = vec![0u8; packet_len];
-    buf[0] = report_id;
     // Length is deliberately not checked. The real keyboard answers a bare
     // read — one sent before any command — with 9 bytes, the same as the
     // receiver's status collection, so width cannot tell them apart. Only the
     // reply to a config read can, and that is the caller's `confirm`.
-    if dev.get_feature_report(&mut buf).is_err() {
-        return Probe::Silent;
+    if read_probe {
+        let mut buf = vec![0u8; packet_len];
+        buf[0] = report_id;
+        if dev.get_feature_report(&mut buf).is_err() {
+            return Probe::Silent;
+        }
     }
 
     Probe::Answered(Transport {

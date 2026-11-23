@@ -23,18 +23,25 @@ pub fn run() -> anyhow::Result<()> {
     if name == "diagnose" {
         return diagnose(&args);
     }
+    if name == "nova-diagnose" {
+        for line in aula_protocol::sonix::diagnose()? {
+            println!("{line}");
+        }
+        return Ok(());
+    }
     if matches!(name, "--version" | "-V") {
         println!("keylux {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
     if matches!(name, "help" | "--help" | "-h") {
         println!("keylux diagnose [--device VID:PID] [--output FILE]\n  Enumerate HID metadata only; no device handles or protocol commands.\n");
+        println!("keylux nova-diagnose\n  AULA Nova 75 Pro: open the command collection and send the read-only status poll, step by step.\n");
         println!("keylux devices [--openrgb IP:PORT | --native]\nkeylux keyboards\nkeylux list\nkeylux <effect> [seconds] [--device SELECTOR | --keyboard NAME] [--openrgb IP:PORT | --native] [--fps N] [--param value ...]\n\nUse devices to list connected keyboard selectors. OpenRGB keyboards require its SDK server.\n--keyboard matches one exact device name and rejects duplicates.\n--native limits discovery to AULA HID. --openrgb restricts discovery to that SDK server.\nWith no selector, the saved GUI selection is used, then automatic selection (AULA preferred).");
         return Ok(());
     }
     if name == "keyboards" {
         println!("Reported variant: AULA F75 Wired 1a2c:9407 (lighting unsupported; see docs/F75-WIRED.md)");
-        println!("Native: AULA F75 (wired and receiver)\nOpenRGB targets (USB; upstream Direct support, physical testing still required):");
+        println!("Native: AULA F75 (wired and receiver), AULA Nova 75 Pro (wired, 0c45:800a)\nOpenRGB targets (USB; upstream Direct support, physical testing still required):");
         for model in aula_protocol::openrgb::catalog::MODELS {
             println!("  {}  [{}]", model.name, model.usb_ids);
         }

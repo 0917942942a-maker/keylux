@@ -60,6 +60,8 @@ fn scan_spec<'a>(opts: &'a ScanOptions) -> ScanSpec<'a> {
         packet_len: p::PACKET_LEN,
         known: p::KNOWN,
         opts,
+        read_probe: true,
+        collection: None,
     }
 }
 
