@@ -112,10 +112,25 @@ pub fn payload(resp: &[u8]) -> &[u8] {
     resp
 }
 
-/// Did the device accept `cmd`?
-pub fn is_ack(resp: &[u8], cmd: u8) -> bool {
+/// Is this the device's echo of `cmd`, whatever its status byte says?
+///
+/// The echo alone identifies the command channel. The status byte (offset 3)
+/// is `01` once the vendor driver has run its start-up sequence, but a freshly
+/// connected board answers `00`, and `ff` until a config transaction has been
+/// committed — so requiring `01` rejects a perfectly good keyboard.
+pub fn is_echo(resp: &[u8], cmd: u8) -> bool {
     let p = payload(resp);
-    p.len() >= 4 && p[0] == PREFIX && p[1] == cmd && p[3] == ACK_OK
+    p.len() >= 4 && p[0] == PREFIX && p[1] == cmd
+}
+
+/// The status byte of an echo, if `resp` is one.
+pub fn status(resp: &[u8], cmd: u8) -> Option<u8> {
+    is_echo(resp, cmd).then(|| payload(resp)[3])
+}
+
+/// Did the device accept `cmd` with the "ready" status?
+pub fn is_ack(resp: &[u8], cmd: u8) -> bool {
+    status(resp, cmd) == Some(ACK_OK)
 }
 
 /// Encode a per-key frame as the pages that follow [`cmd::PER_KEY`].
@@ -209,6 +224,19 @@ mod tests {
         assert!(!is_ack(&bare, cmd::STATUS));
         assert!(!is_ack(&[0x04, 0x02, 0x00, 0xff], cmd::STATUS));
         assert!(!is_ack(&[], cmd::STATUS));
+    }
+
+    #[test]
+    fn a_not_ready_status_is_still_an_echo() {
+        // What the board answered on hardware, 65 bytes with the report ID.
+        let mut resp = vec![0u8; PACKET_LEN];
+        resp[1..5].copy_from_slice(&[0x04, 0x02, 0x00, 0xff]);
+        assert!(is_echo(&resp, cmd::STATUS));
+        assert_eq!(status(&resp, cmd::STATUS), Some(0xff));
+        assert!(!is_ack(&resp, cmd::STATUS));
+        assert!(!is_echo(&resp, cmd::PER_KEY));
+        // A colour page is not an echo.
+        assert!(!is_echo(&[0x00, 0x00, 0x00, 0x00, 0x01, 0xfa], cmd::STATUS));
     }
 
     #[test]

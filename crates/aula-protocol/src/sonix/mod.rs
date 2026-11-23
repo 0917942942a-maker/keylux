@@ -52,23 +52,30 @@ fn scan_spec<'a>(opts: &'a ScanOptions) -> ScanSpec<'a> {
     }
 }
 
-/// Send one command and check its echo.
+/// Send one command and read its echo.
 ///
-/// The vendor driver reads the echo ~3 ms after the write, and the firmware
-/// answers `04 xx 00 ff` while busy, so the read is retried a few times
-/// before giving up. The write itself is never repeated here.
+/// Succeeds on any echo of `cmd`; the status byte is the caller's business
+/// (see [`p::is_echo`]). An echo with the ready status ends the wait early;
+/// otherwise the read is retried a few times and the last echo returned.
+/// The write itself is never repeated here.
 fn exchange(io: &Transport, cmd: u8, arg: u8) -> Result<Vec<u8>> {
     io.send(&p::command(cmd, arg))?;
-    let mut last = Err(Error::Nack { cmd });
-    for attempt in 0..4 {
+    let mut echo = None;
+    let mut err = None;
+    for attempt in 0..3 {
         thread::sleep(Duration::from_millis(if attempt == 0 { 3 } else { 15 }));
         match io.receive() {
             Ok(resp) if p::is_ack(&resp, cmd) => return Ok(resp),
-            Ok(_) => last = Err(Error::Nack { cmd }),
-            Err(e) => last = Err(e),
+            Ok(resp) if p::is_echo(&resp, cmd) => echo = Some(resp),
+            Ok(_) => {}
+            Err(e) => err = Some(e),
         }
     }
-    last
+    match (echo, err) {
+        (Some(resp), _) => Ok(resp),
+        (None, Some(e)) => Err(e),
+        (None, None) => Err(Error::Nack { cmd }),
+    }
 }
 
 /// Step-by-step report of how the Nova's command collection responds.
@@ -76,7 +83,7 @@ fn exchange(io: &Transport, cmd: u8, arg: u8) -> Result<Vec<u8>> {
 /// Touches only the `ff13` collection, and sends only the status poll the
 /// vendor driver itself sends constantly. One line per step, for a user to
 /// paste back when discovery fails.
-pub fn diagnose() -> Result<Vec<String>> {
+pub fn diagnose(esc_red: bool) -> Result<Vec<String>> {
     let hex = |b: &[u8]| {
         b.iter()
             .take(12)
@@ -118,13 +125,46 @@ pub fn diagnose() -> Result<Vec<String>> {
             thread::sleep(Duration::from_millis(if attempt == 0 { 3 } else { 15 }));
             match io.receive() {
                 Ok(r) => out.push(format!(
-                    "  read #{attempt}: {} bytes [{}] ack={}",
+                    "  read #{attempt}: {} bytes [{}] echo={} status={:?}",
                     r.len(),
                     hex(&r),
-                    p::is_ack(&r, p::cmd::STATUS)
+                    p::is_echo(&r, p::cmd::STATUS),
+                    p::status(&r, p::cmd::STATUS)
                 )),
                 Err(e) => out.push(format!("  read #{attempt}: FAILED {e}")),
             }
+        }
+        if esc_red {
+            // One per-key frame: Esc red, everything else off. Exactly the
+            // packets the vendor driver sends, so no new command is tried.
+            let mut entries: Vec<(u8, [u8; 3])> =
+                keymap::SLOTS.iter().map(|(i, _)| (*i, [0, 0, 0])).collect();
+            entries[0].1 = [0xff, 0, 0];
+            match exchange(&io, p::cmd::PER_KEY, p::PER_KEY_PAGES) {
+                Ok(r) => out.push(format!(
+                    "  per-key 04 20: echo [{}] status={:?}",
+                    hex(&r),
+                    p::status(&r, p::cmd::PER_KEY)
+                )),
+                Err(e) => {
+                    out.push(format!("  per-key 04 20: FAILED {e}"));
+                    continue;
+                }
+            }
+            let mut sent = 0;
+            for page in p::per_key_pages(&entries) {
+                match io.send(&page) {
+                    Ok(()) => sent += 1,
+                    Err(e) => {
+                        out.push(format!("  page {sent}: FAILED {e}"));
+                        break;
+                    }
+                }
+            }
+            out.push(format!(
+                "  sent {sent}/{} pages. Esc should now be red, every other key off.",
+                p::PER_KEY_PAGES
+            ));
         }
     }
     Ok(out)
