@@ -4,6 +4,9 @@ Checked **30 September 2026**. Keylux has two control paths:
 
 - **Native AULA F75:** the existing HID driver, with its verified wiring map,
   wired/receiver pacing, and permanent-frame command.
+- **Native AULA Nova 75 Pro (wired, `0c45:800a`):** a separate SONiX driver.
+  Per-key colours and streamed effects; no lighting-mode changes. See
+  [NOVA75.md](NOVA75.md).
 - **OpenRGB:** a TCP SDK client that sends keylux effects to keyboards detected
   by a separately running OpenRGB server. This supports multiple brands through
   their existing OpenRGB drivers.
@@ -15,6 +18,12 @@ verify the SDK protocol and application behavior; they cannot establish actual
 LED colors, typing reliability, or firmware compatibility on absent hardware.
 
 ## Model targets
+
+**AULA Nova 75 Pro, wired `0c45:800a`** is driven natively by `sonix::Sonix`.
+It is a SONiX chip, not the F75's Sinowealth one, and OpenRGB 1.1 does not
+detect it. Two key names in its map (`RAlt`, `Fn`) are inferred; confirm with
+`cargo run --example smoke -- nova-led <slot>`. The 2.4 GHz and Bluetooth links
+have not been captured.
 
 The reported **AULA F75 Wired `1a2c:9407`** variant is recognized but its lighting
 protocol is **unsupported**. It is distinct from the native `258a:010c` model.

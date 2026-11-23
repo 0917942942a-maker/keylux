@@ -11,6 +11,9 @@
 //! cargo run --example smoke -- layout           # print the LED map
 //! cargo run --example smoke -- dry              # print packet headers, no device needed
 //!
+//! cargo run --example smoke -- nova-ping        # Nova 75 Pro: status + colour readback (read commands only)
+//! cargo run --example smoke -- nova-led 5       # Nova 75 Pro: light one frame slot white, to map keys
+//!
 //! cargo run --example smoke -- dongle-info      # receivers present
 //! cargo run --example smoke -- dongle-rows      # one colour per row: an LED-map test
 //! cargo run --example smoke -- dongle-red 10    # solid, held, to see whether it sticks
@@ -32,6 +35,7 @@ use std::time::{Duration, Instant};
 
 use aula_protocol::device::RgbDevice;
 use aula_protocol::f75::{keymap, protocol as p, F75};
+use aula_protocol::sonix::{self, keymap as nova_keymap, Sonix};
 use aula_protocol::transport::ProbeResult;
 use aula_protocol::{dongle, ChannelOrder, DeviceId, Frame, Keyboard, Rgb, ScanOptions};
 
@@ -47,6 +51,13 @@ fn main() -> anyhow::Result<()> {
         "layout" => layout(),
         "dry" => dry_run(),
         "red" => red(&opts, device_arg(&args)?)?,
+        "nova-ping" => nova_ping(&opts)?,
+        "nova-led" => {
+            let slot: usize = args.get(1).and_then(|s| s.parse().ok()).ok_or_else(|| {
+                anyhow::anyhow!("usage: nova-led <slot 0..{}>", nova_keymap::LED_COUNT - 1)
+            })?;
+            nova_led(&opts, slot)?
+        }
         "dongle-info" => dongle_info(&opts.allow)?,
         "dongle-red" => dongle_solid(&opts.allow, Rgb::new(255, 0, 0), hold(&args))?,
         "dongle-green" => dongle_solid(&opts.allow, Rgb::new(0, 255, 0), hold(&args))?,
@@ -77,7 +88,7 @@ fn main() -> anyhow::Result<()> {
         }
         other => {
             eprintln!(
-                "unknown command {other:?}; use scan | info | ping | layout | dry | red | wave | \n                 dongle-info | dongle-red | dongle-green | dongle-off | dongle-wave"
+                "unknown command {other:?}; use scan | info | ping | layout | dry | red | wave | nova-ping | nova-led | \n                 dongle-info | dongle-red | dongle-green | dongle-off | dongle-wave"
             );
             std::process::exit(1);
         }
@@ -285,6 +296,60 @@ fn ping(opts: &ScanOptions, id: Option<DeviceId>) -> anyhow::Result<()> {
         kb.is_per_key_mode()?
     );
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// AULA Nova 75 Pro (SONiX)
+// ---------------------------------------------------------------------------
+
+/// Status poll and colour readback. Both are reads the vendor driver sends
+/// constantly; nothing is written.
+fn nova_ping(opts: &ScanOptions) -> anyhow::Result<()> {
+    for c in sonix::probe(opts)? {
+        println!(
+            "  usage_page={:#06x} usage={:#06x} iface={:<3} {:?}",
+            c.info.usage_page, c.info.usage, c.info.interface, c.result
+        );
+    }
+    let kb = Sonix::open(opts)?;
+    println!("{} at {}", kb.name(), kb.hid_path());
+    let st = kb.ping()?;
+    println!("status: {}", hex(&st[..st.len().min(12)]));
+    let colors = kb.read_colors()?;
+    let lit: Vec<String> = colors
+        .iter()
+        .filter(|(_, c)| *c != [0, 0, 0])
+        .map(|(i, c)| format!("{i:02x}={}", hex(c)))
+        .collect();
+    println!("{} positions read, {} lit:", colors.len(), lit.len());
+    for row in lit.chunks(8) {
+        println!("  {}", row.join(" "));
+    }
+    Ok(())
+}
+
+/// Light exactly one frame slot white and say which key it should be. The way
+/// to confirm the ❓ entries in `sonix::keymap`.
+fn nova_led(opts: &ScanOptions, slot: usize) -> anyhow::Result<()> {
+    let Some((idx, name)) = nova_keymap::SLOTS.get(slot) else {
+        anyhow::bail!(
+            "slot {slot} is out of range (0..{})",
+            nova_keymap::LED_COUNT
+        );
+    };
+    let mut kb = Sonix::open(opts)?;
+    let mut f = Frame::black(kb.led_count());
+    f.set(slot, Rgb::WHITE);
+    kb.set_static(&f)?;
+    println!("slot {slot} = matrix {idx:#04x}, expected key: {name}. Which key lit up?");
+    Ok(())
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter()
+        .map(|x| format!("{x:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 // ---------------------------------------------------------------------------

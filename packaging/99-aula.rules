@@ -10,6 +10,10 @@
 SUBSYSTEM=="hidraw", ATTRS{idVendor}=="258a", ATTRS{idProduct}=="010c", MODE="0660", TAG+="uaccess"
 SUBSYSTEM=="usb", ATTRS{idVendor}=="258a", ATTRS{idProduct}=="010c", MODE="0660", TAG+="uaccess"
 
+# AULA Nova 75 Pro (SONiX) — wired USB-C mode
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0c45", ATTRS{idProduct}=="800a", MODE="0660", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0c45", ATTRS{idProduct}=="800a", MODE="0660", TAG+="uaccess"
+
 # AULA 2.4 GHz receiver (Compx) — the wireless link
 #
 # A receiver is a separate USB device under its own chipset's VID/PID, not the

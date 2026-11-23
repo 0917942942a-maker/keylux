@@ -8,6 +8,7 @@ use crate::color::ChannelOrder;
 use crate::device::{DeviceId, Frame, KeyPos, Link, RgbDevice};
 use crate::dongle::{self, Dongle};
 use crate::f75::F75;
+use crate::sonix::{self, Sonix};
 use crate::transport::{self, Choice, DeviceCandidate, ScanOptions};
 use crate::{Error, Result};
 
@@ -15,6 +16,8 @@ use crate::{Error, Result};
 pub enum Keyboard {
     Wired(F75),
     Wireless(Dongle),
+    /// AULA Nova 75 Pro (SONiX), wired.
+    Nova(Sonix),
 }
 
 impl Keyboard {
@@ -25,11 +28,15 @@ impl Keyboard {
     /// searches are genuinely different and are simply concatenated.
     pub fn discover(opts: &ScanOptions) -> Result<Vec<DeviceCandidate>> {
         let mut found = F75::discover(opts)?;
+        found.extend(sonix::discover(opts)?);
         found.extend(dongle::discover(&opts.allow)?);
         Ok(found)
     }
 
     pub fn open_candidate(c: &DeviceCandidate, order: ChannelOrder) -> Result<Self> {
+        if c.model == sonix::MODEL {
+            return Sonix::open_candidate(c, order).map(Keyboard::Nova);
+        }
         match c.link {
             Link::Dongle => Dongle::open_candidate(c).map(Keyboard::Wireless),
             _ => F75::open_candidate(c, order).map(Keyboard::Wired),
@@ -43,6 +50,7 @@ impl Keyboard {
             Choice::Use(i) => Self::open_candidate(&found[i], ChannelOrder::Rgb),
             _ => Err(Error::NotFound {
                 searched: crate::f75::protocol::KNOWN.len()
+                    + sonix::protocol::KNOWN.len()
                     + dongle::KNOWN.len()
                     + opts.allow.len(),
             }),
@@ -56,6 +64,7 @@ impl Keyboard {
             Choice::Use(i) => Self::open_candidate(&found[i], ChannelOrder::Rgb),
             _ => Err(Error::NotFound {
                 searched: crate::f75::protocol::KNOWN.len()
+                    + sonix::protocol::KNOWN.len()
                     + dongle::KNOWN.len()
                     + opts.allow.len(),
             }),
@@ -66,6 +75,7 @@ impl Keyboard {
         match self {
             Keyboard::Wired(k) => k.id(),
             Keyboard::Wireless(k) => k.id(),
+            Keyboard::Nova(k) => k.id(),
         }
     }
 
@@ -73,6 +83,7 @@ impl Keyboard {
         match self {
             Keyboard::Wired(k) => k.link(),
             Keyboard::Wireless(_) => Link::Dongle,
+            Keyboard::Nova(_) => Link::Wired,
         }
     }
 
@@ -80,6 +91,7 @@ impl Keyboard {
         match self {
             Keyboard::Wired(k) => k.hid_path(),
             Keyboard::Wireless(k) => k.hid_path(),
+            Keyboard::Nova(k) => k.hid_path(),
         }
     }
 
@@ -91,6 +103,8 @@ impl Keyboard {
         match self {
             Keyboard::Wired(k) => k.can_change_mode(),
             Keyboard::Wireless(_) => false,
+            // Stored-mode writes are decoded but not implemented for the Nova.
+            Keyboard::Nova(_) => false,
         }
     }
 }
@@ -100,6 +114,7 @@ impl RgbDevice for Keyboard {
         match self {
             Keyboard::Wired(k) => k.name(),
             Keyboard::Wireless(k) => k.name(),
+            Keyboard::Nova(k) => k.name(),
         }
     }
 
@@ -107,6 +122,7 @@ impl RgbDevice for Keyboard {
         match self {
             Keyboard::Wired(k) => k.led_count(),
             Keyboard::Wireless(k) => k.led_count(),
+            Keyboard::Nova(k) => k.led_count(),
         }
     }
 
@@ -114,6 +130,7 @@ impl RgbDevice for Keyboard {
         match self {
             Keyboard::Wired(k) => k.layout(),
             Keyboard::Wireless(k) => k.layout(),
+            Keyboard::Nova(k) => k.layout(),
         }
     }
 
@@ -121,6 +138,7 @@ impl RgbDevice for Keyboard {
         match self {
             Keyboard::Wired(k) => k.max_fps(),
             Keyboard::Wireless(k) => k.max_fps(),
+            Keyboard::Nova(k) => k.max_fps(),
         }
     }
 
@@ -128,6 +146,7 @@ impl RgbDevice for Keyboard {
         match self {
             Keyboard::Wired(k) => k.ensure_per_key_mode(),
             Keyboard::Wireless(k) => k.ensure_per_key_mode(),
+            Keyboard::Nova(k) => k.ensure_per_key_mode(),
         }
     }
 
@@ -135,6 +154,7 @@ impl RgbDevice for Keyboard {
         match self {
             Keyboard::Wired(k) => k.set_static(frame),
             Keyboard::Wireless(k) => k.set_static(frame),
+            Keyboard::Nova(k) => k.set_static(frame),
         }
     }
 
@@ -142,6 +162,7 @@ impl RgbDevice for Keyboard {
         match self {
             Keyboard::Wired(k) => k.stream(frame),
             Keyboard::Wireless(k) => k.stream(frame),
+            Keyboard::Nova(k) => k.stream(frame),
         }
     }
 
@@ -149,6 +170,7 @@ impl RgbDevice for Keyboard {
         match self {
             Keyboard::Wired(k) => k.set_max_fps(fps),
             Keyboard::Wireless(k) => k.set_max_fps(fps),
+            Keyboard::Nova(k) => k.set_max_fps(fps),
         }
     }
 }

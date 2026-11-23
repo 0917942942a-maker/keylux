@@ -1,8 +1,9 @@
 //! Native AULA RGB HID protocols and a cross-brand OpenRGB SDK client.
 //!
-//! Currently implements the **AULA F75** (`258a:010c`, Sinowealth 8051). The
-//! protocol was reverse-engineered from USBPcap captures of the vendor driver;
-//! see `docs/PROTOCOL.md` for the full write-up.
+//! Currently implements the **AULA F75** (`258a:010c`, Sinowealth 8051) and the
+//! **AULA Nova 75 Pro** (`0c45:800a`, SONiX, wired). Both protocols were
+//! reverse-engineered from USBPcap captures of the vendor driver; see
+//! `docs/PROTOCOL.md` and `docs/NOVA75.md`.
 //! Other keyboards can be controlled through [`openrgb::OpenRgbKeyboard`]
 //! and a separately running OpenRGB SDK server; see `docs/KEYBOARDS.md`.
 //!
@@ -53,6 +54,7 @@ pub mod dongle;
 pub mod f75;
 pub mod keyboard;
 pub mod openrgb;
+pub mod sonix;
 pub mod transport;
 
 pub use color::{ChannelOrder, Rgb};
@@ -118,6 +120,9 @@ pub enum Error {
         .magic[0], .magic[1]
     )]
     BadConfigRead { magic: [u8; 2] },
+
+    #[error("the keyboard did not acknowledge command {cmd:#04x}")]
+    Nack { cmd: u8 },
 
     #[error(
         "refused to write a config block that fails the 5A A5 signature check — \
