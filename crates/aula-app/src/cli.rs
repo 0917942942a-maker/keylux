@@ -24,8 +24,19 @@ pub fn run() -> anyhow::Result<()> {
         return diagnose(&args);
     }
     if name == "nova-diagnose" {
-        let esc_red = args.iter().any(|a| a == "--esc-red");
-        for line in aula_protocol::sonix::diagnose(esc_red)? {
+        let mut writes = aula_protocol::sonix::DiagnoseWrites::default();
+        if args.iter().any(|a| a == "--esc-red") {
+            writes.esc_red_frames = 1;
+        }
+        if let Some(n) = option(&args, "--stream")? {
+            writes.esc_red_frames = n.parse()?;
+            anyhow::ensure!(
+                writes.esc_red_frames <= 600,
+                "--stream is at most 600 frames"
+            );
+        }
+        writes.end_transaction = args.iter().any(|a| a == "--end-transaction");
+        for line in aula_protocol::sonix::diagnose(writes)? {
             println!("{line}");
         }
         return Ok(());
@@ -36,7 +47,7 @@ pub fn run() -> anyhow::Result<()> {
     }
     if matches!(name, "help" | "--help" | "-h") {
         println!("keylux diagnose [--device VID:PID] [--output FILE]\n  Enumerate HID metadata only; no device handles or protocol commands.\n");
-        println!("keylux nova-diagnose [--esc-red]\n  AULA Nova 75 Pro: open the command collection and send the read-only status poll, step by step.\n  --esc-red also sends one per-key frame: Esc red, all other keys off.\n");
+        println!("keylux nova-diagnose [--esc-red | --stream N] [--end-transaction]\n  AULA Nova 75 Pro: open the command collection and send the read-only status poll, step by step.\n  --esc-red sends one per-key frame (Esc red, all other keys off); --stream N sends N of them ~48 ms apart.\n  --end-transaction first sends 04 f0, which closes a config transaction left open.\n");
         println!("keylux devices [--openrgb IP:PORT | --native]\nkeylux keyboards\nkeylux list\nkeylux <effect> [seconds] [--device SELECTOR | --keyboard NAME] [--openrgb IP:PORT | --native] [--fps N] [--param value ...]\n\nUse devices to list connected keyboard selectors. OpenRGB keyboards require its SDK server.\n--keyboard matches one exact device name and rejects duplicates.\n--native limits discovery to AULA HID. --openrgb restricts discovery to that SDK server.\nWith no selector, the saved GUI selection is used, then automatic selection (AULA preferred).");
         return Ok(());
     }

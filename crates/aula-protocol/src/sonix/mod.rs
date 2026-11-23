@@ -83,7 +83,18 @@ fn exchange(io: &Transport, cmd: u8, arg: u8) -> Result<Vec<u8>> {
 /// Touches only the `ff13` collection, and sends only the status poll the
 /// vendor driver itself sends constantly. One line per step, for a user to
 /// paste back when discovery fails.
-pub fn diagnose(esc_red: bool) -> Result<Vec<String>> {
+/// Optional write steps for [`diagnose`]. All off means read-only.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DiagnoseWrites {
+    /// Per-key frames of Esc red, everything else off. 0 = none.
+    pub esc_red_frames: u32,
+    /// Send `04 f0` (end of a config transaction) once before anything else,
+    /// then re-read the status. The vendor driver sends it after every config
+    /// write; here it closes a transaction left open, if there is one.
+    pub end_transaction: bool,
+}
+
+pub fn diagnose(writes: DiagnoseWrites) -> Result<Vec<String>> {
     let hex = |b: &[u8]| {
         b.iter()
             .take(12)
@@ -134,39 +145,74 @@ pub fn diagnose(esc_red: bool) -> Result<Vec<String>> {
                 Err(e) => out.push(format!("  read #{attempt}: FAILED {e}")),
             }
         }
-        if esc_red {
-            // One per-key frame: Esc red, everything else off. Exactly the
-            // packets the vendor driver sends, so no new command is tried.
+        if writes.end_transaction {
+            match io.send(&p::command(p::cmd::COMMIT, 0)) {
+                Ok(()) => out.push("  write 04 f0: ok".into()),
+                Err(e) => out.push(format!("  write 04 f0: FAILED {e}")),
+            }
+            thread::sleep(Duration::from_millis(300));
+            match exchange(&io, p::cmd::STATUS, 0) {
+                Ok(r) => out.push(format!(
+                    "  status after 04 f0: [{}] status={:?}",
+                    hex(&r),
+                    p::status(&r, p::cmd::STATUS)
+                )),
+                Err(e) => out.push(format!("  status after 04 f0: FAILED {e}")),
+            }
+        }
+        if writes.esc_red_frames > 0 {
+            // Esc red, everything else off. Exactly the packets the vendor
+            // driver streams, at its own ~48 ms spacing.
             let mut entries: Vec<(u8, [u8; 3])> =
                 keymap::SLOTS.iter().map(|(i, _)| (*i, [0, 0, 0])).collect();
             entries[0].1 = [0xff, 0, 0];
-            match exchange(&io, p::cmd::PER_KEY, p::PER_KEY_PAGES) {
-                Ok(r) => out.push(format!(
-                    "  per-key 04 20: echo [{}] status={:?}",
-                    hex(&r),
-                    p::status(&r, p::cmd::PER_KEY)
-                )),
-                Err(e) => {
-                    out.push(format!("  per-key 04 20: FAILED {e}"));
-                    continue;
-                }
-            }
-            let mut sent = 0;
-            for page in p::per_key_pages(&entries) {
-                match io.send(&page) {
-                    Ok(()) => sent += 1,
+            let mut ok = 0;
+            let mut first_err = None;
+            let mut statuses = std::collections::BTreeSet::new();
+            for _ in 0..writes.esc_red_frames {
+                let started = std::time::Instant::now();
+                match exchange(&io, p::cmd::PER_KEY, p::PER_KEY_PAGES) {
+                    Ok(r) => {
+                        if let Some(s) = p::status(&r, p::cmd::PER_KEY) {
+                            statuses.insert(s);
+                        }
+                    }
                     Err(e) => {
-                        out.push(format!("  page {sent}: FAILED {e}"));
+                        first_err.get_or_insert(format!("04 20: {e}"));
+                        continue;
+                    }
+                }
+                let mut pages_ok = true;
+                for page in p::per_key_pages(&entries) {
+                    if let Err(e) = io.send(&page) {
+                        first_err.get_or_insert(format!("page: {e}"));
+                        pages_ok = false;
                         break;
                     }
                 }
+                if pages_ok {
+                    ok += 1;
+                }
+                let gap = Duration::from_millis(48);
+                if let Some(rest) = gap.checked_sub(started.elapsed()) {
+                    thread::sleep(rest);
+                }
             }
             out.push(format!(
-                "  sent {sent}/{} pages. Esc should now be red, every other key off.",
-                p::PER_KEY_PAGES
+                "  per-key frames: {ok}/{} sent, 04 20 status seen {:?}{}",
+                writes.esc_red_frames,
+                statuses,
+                first_err.map(|e| format!(", first error {e}")).unwrap_or_default()
             ));
+            match exchange(&io, p::cmd::STATUS, 0) {
+                Ok(r) => out.push(format!(
+                    "  status after frames: status={:?}",
+                    p::status(&r, p::cmd::STATUS)
+                )),
+                Err(e) => out.push(format!("  status after frames: FAILED {e}")),
+            }
+            out.push("  Esc should now be red and every other key off.".into());
         }
-    }
     Ok(out)
 }
 
