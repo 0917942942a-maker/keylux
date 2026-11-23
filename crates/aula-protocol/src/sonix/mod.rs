@@ -5,9 +5,10 @@
 //!
 //! * **Discovery is read-only.** A collection is confirmed by the status poll
 //!   (`04 02`), which the vendor driver itself sends several times a second.
-//! * **Colours go out as per-key frames (`04 20`).** They take effect
-//!   immediately in whatever lighting mode the board is in, and stay after the
-//!   host goes quiet, so there is no mode switch and no keepalive.
+//! * **Colours go out as per-key frames (`04 20`).** Verified on hardware:
+//!   they show over the board's **static** mode, are painted over by its
+//!   animated effects, and are dropped shortly after the host stops sending —
+//!   so frames are kept alive (see [`protocol::KEEPALIVE_MS`]).
 //! * **No stored-settings writes.** The mode transaction (`04 18 / 04 13 /
 //!   04 f0`) is decoded but unused: nothing in keylux needs it yet, and it is
 //!   the one path here that changes non-volatile state.
@@ -355,21 +356,28 @@ impl RgbDevice for Sonix {
         p::MAX_FPS
     }
 
-    /// Nothing to do: per-key frames render in any mode.
+    /// Not implemented. Frames only show over the board's static mode, and
+    /// switching to it is a stored-settings write (`04 18 / 04 13 / 04 f0`)
+    /// that has not been exercised from keylux yet; set static in the vendor
+    /// app once instead. See `docs/NOVA75.md`.
     fn ensure_per_key_mode(&mut self) -> Result<bool> {
         Ok(false)
     }
 
-    /// The same per-key frame as [`RgbDevice::stream`], always sent.
-    ///
-    /// Colours stay after the host stops sending. Whether they survive a
-    /// replug has not been checked; see `docs/NOVA75.md`.
+    /// Nothing on this board persists host colours, so this is an immediate
+    /// full repaint and nothing more: the board returns to its stored mode
+    /// once frames stop.
     fn set_static(&mut self, frame: &Frame) -> Result<()> {
         self.send_frame(frame)
     }
 
     fn stream(&mut self, frame: &Frame) -> Result<()> {
-        if self.last_frame.as_ref() == Some(frame) {
+        // Skip a frame the board is already showing, but only until the
+        // firmware would drop it.
+        let fresh = self
+            .last_write
+            .is_some_and(|t| t.elapsed() < Duration::from_millis(p::KEEPALIVE_MS));
+        if fresh && self.last_frame.as_ref() == Some(frame) {
             return Ok(());
         }
         self.send_frame(frame)

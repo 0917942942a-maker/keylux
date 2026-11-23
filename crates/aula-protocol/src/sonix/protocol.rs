@@ -84,6 +84,13 @@ pub const MAX_ENTRIES: usize = PER_KEY_PAGES as usize * ENTRIES_PER_PAGE;
 pub const MIN_FRAME_GAP_MS: u64 = 46;
 pub const MAX_FPS: u32 = (1000 / MIN_FRAME_GAP_MS) as u32;
 
+/// Host colours are volatile: verified on hardware, the board repaints its
+/// stored mode shortly after frames stop arriving. So an unchanged frame is
+/// still re-sent this often. The exact firmware timeout is unmeasured; the
+/// vendor driver sidesteps it by streaming continuously at ~21 FPS, and a
+/// 100 ms keepalive stays well inside anything that behaviour implies.
+pub const KEEPALIVE_MS: u64 = 100;
+
 /// One command packet, ready for `send_feature_report`.
 pub fn command(cmd: u8, arg: u8) -> [u8; PACKET_LEN] {
     let mut buf = [0u8; PACKET_LEN];

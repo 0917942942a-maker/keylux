@@ -79,22 +79,31 @@ The full index → key map is `crates/aula-protocol/src/sonix/keymap.rs`. Esc
 
 `aula_protocol::sonix::Sonix`, reached through `Keyboard::Nova`.
 
-- Discovery: known id only (never deep/allow-list), confirmed by `04 02` ack.
+- Discovery: known id only (never deep/allow-list), `ff13` / interface 3
+  collection only, no bare read first, confirmed by the `04 02` echo.
 - `stream` / `set_static`: one `04 20 … 08` + ack + 8 pages,
   paced ≥ 46 ms; identical frames are skipped in `stream`.
-- `ensure_per_key_mode` is a no-op; mode writes are not implemented.
+- Frames are kept alive (re-sent every 100 ms when unchanged).
+- `ensure_per_key_mode` is a no-op; mode writes are not implemented, so put the
+  board in a **static** mode once from the vendor app.
+- Diagnostics: `keylux nova-diagnose [--esc-red | --stream N] [--end-transaction]`.
 - Smoke: `nova-ping` (status + colour readback), `nova-led <slot>`.
 
 ## Open questions ❓
 
 1. ✅ **Per-key byte order = `[led_idx, R, G, B]`.** Confirmed: the final frame
    `01 fe 00 00` made Esc physically **red**.
-2. **Per-key frames vs. mode.** `04 20` frames changed the LEDs live *without* a
-   `04 13` mode switch (keyboard was in static-green mode), but `04 f5` readback
-   kept reporting the stored mode colours. So: `04 20` = live/direct overlay,
-   `04 f5` = stored state. ✅ User-reported: per-key colours **persist** after the
-   host stops streaming, so keylux can send one frame per change (no keep-alive).
-   Behaviour after unplug/replug or a mode change not yet checked ❓
+2. ✅ **Per-key frames vs. mode (verified with keylux on hardware).** `04 20`
+   frames show over the board's **static** mode without any mode command, are
+   painted over by its animated effects, and are **dropped shortly after the
+   host stops sending** — the board repaints its stored mode. (An earlier note
+   here said they persisted; that was wrong.) keylux re-sends unchanged frames
+   every `KEEPALIVE_MS`. Exact firmware timeout unmeasured ❓
+4. ✅ **Status byte.** Byte 3 of an echo is state, not acceptance: `00` right
+   after plugging in, `ff` while idle / inside an uncommitted transaction, `01`
+   once the host is streaming or after `04 f0`. keylux identifies the channel by
+   the echo alone. On hardware `04 02` answered `ff` until per-key frames
+   started, then `01`.
 3. Meaning of bytes 9/10 and the "off" block.
 
 ## Safety
