@@ -84,6 +84,14 @@ pub const MAX_ENTRIES: usize = PER_KEY_PAGES as usize * ENTRIES_PER_PAGE;
 pub const MIN_FRAME_GAP_MS: u64 = 46;
 pub const MAX_FPS: u32 = (1000 / MIN_FRAME_GAP_MS) as u32;
 
+/// Per-frame timing, copied from the vendor driver (03_esc_blue.pcapng):
+/// `04 02`, read ~6 ms later; ~5 ms; `04 20`, read ~6 ms later; then the 8
+/// pages ~3 ms apart. Pages sent back-to-back arrive faster than the firmware
+/// takes them, which on hardware showed up as badly stuttering animation.
+pub const ECHO_DELAY_MS: u64 = 6;
+pub const COMMAND_GAP_MS: u64 = 5;
+pub const PAGE_GAP_MS: u64 = 3;
+
 /// Host colours are volatile: verified on hardware, the board repaints its
 /// stored mode shortly after frames stop arriving. So an unchanged frame is
 /// still re-sent this often. The exact firmware timeout is unmeasured; the

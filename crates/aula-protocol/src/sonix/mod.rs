@@ -319,11 +319,37 @@ impl Sonix {
         self.last_write = Some(Instant::now());
     }
 
+    /// One frame, paced exactly like the vendor driver: status poll, per-key
+    /// command, then the pages with a gap between each. The status byte is
+    /// ignored (the vendor driver gets `ff` here too and carries on); only a
+    /// missing echo of `04 20` is an error.
     fn send_frame(&mut self, frame: &Frame) -> Result<()> {
+        let ms = |n| thread::sleep(Duration::from_millis(n));
         self.respect_gap();
-        exchange(&self.io, p::cmd::PER_KEY, p::PER_KEY_PAGES)?;
-        for page in p::per_key_pages(&encode(self.order, frame)) {
-            self.io.send(&page)?;
+
+        self.io.send(&p::command(p::cmd::STATUS, 0))?;
+        ms(p::ECHO_DELAY_MS);
+        let _ = self.io.receive()?;
+        ms(p::COMMAND_GAP_MS);
+
+        self.io
+            .send(&p::command(p::cmd::PER_KEY, p::PER_KEY_PAGES))?;
+        ms(p::ECHO_DELAY_MS);
+        let echo = self.io.receive()?;
+        if !p::is_echo(&echo, p::cmd::PER_KEY) {
+            return Err(Error::Nack {
+                cmd: p::cmd::PER_KEY,
+            });
+        }
+
+        for (i, page) in p::per_key_pages(&encode(self.order, frame))
+            .iter()
+            .enumerate()
+        {
+            if i > 0 {
+                ms(p::PAGE_GAP_MS);
+            }
+            self.io.send(page)?;
         }
         self.last_frame = Some(frame.clone());
         Ok(())
